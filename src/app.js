@@ -57,7 +57,7 @@ await fastify.register(cors, {
 await fastify.register(swagger, {
   openapi: {
     info: {
-      title: 'boilerplate-ds611b',
+      title: 'ai-service-ds611b',
       description: 'API Documentation',
       version: '1.0.0'
     },
