@@ -1,5 +1,5 @@
 # Usa una imagen oficial de Node.js (en este ejemplo, versión 18-alpine)
-FROM node:18-alpine
+FROM node:20-alpine
 LABEL authors="c4rberus"
 
 
