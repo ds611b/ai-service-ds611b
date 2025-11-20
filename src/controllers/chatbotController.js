@@ -27,7 +27,7 @@ const SYSTEM_CONTEXT = `
 // Configuración de IA Generativa
 const genAI = new GoogleGenerativeAI(config.google.ai.apiKey);
 const aiModel = genAI.getGenerativeModel({
-    model: 'gemini-1.5-flash',
+    model: 'gemini-2.5-flash',
     safetySettings: [
         {
             category: 'HARM_CATEGORY_HARASSMENT',
