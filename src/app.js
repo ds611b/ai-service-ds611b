@@ -47,7 +47,9 @@ const { port, host, docsPath } = config;
  * Se permiten todos los origenes en el CORS
  */
 await fastify.register(cors, {
-  origin: '*', // Permite todos los orígenes. Cámbialo por un dominio específico en producción.
+  origin: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  credentials: true,
 });
 
 /**
