@@ -10,7 +10,7 @@ const Usuarios = sequelize.define('Usuarios', {
   primer_nombre: {
     type: DataTypes.STRING(100),
     allowNull: false,
-  }, 
+  },
   segundo_nombre: {
     type: DataTypes.STRING(100),
     allowNull: false,
@@ -35,6 +35,11 @@ const Usuarios = sequelize.define('Usuarios', {
   rol_id: {
     type: DataTypes.INTEGER,
     allowNull: false,
+  },
+  status: {
+    type: DataTypes.TINYINT,
+    allowNull: false,
+    defaultValue: 1,
   },
 }, {
   tableName: 'Usuarios',
