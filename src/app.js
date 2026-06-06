@@ -24,6 +24,7 @@ import coordinadoresCarreraRoutes from './routes/coordinadoresCarreraRoutes.js';
 import contactoEmergenciaRoutes from './routes/contactoEmergenciaRoutes.js';
 import encargadoInstitucionRoutes from './routes/encargadoInstitucionRoutes.js';
 import chatbotRoutes from './routes/chatbotRoutes.js';
+import recomendacionRoutes from './routes/recomendacionRoutes.js';
 import { getPerfilUsuarioById } from './controllers/perfilUsuarioController.js';
 
 
@@ -894,6 +895,7 @@ fastify.register(coordinadoresCarreraRoutes, { prefix: '/api' });
 fastify.register(contactoEmergenciaRoutes, { prefix: '/api' });
 fastify.register(encargadoInstitucionRoutes, { prefix: '/api' });
 fastify.register(chatbotRoutes, { prefix: '/api' });
+fastify.register(recomendacionRoutes, { prefix: '/api' });
 
 /**
  * Registra la landing page de la API
