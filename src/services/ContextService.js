@@ -4,52 +4,72 @@ import {
     Habilidades, UsuariosHabilidades
 } from '../models/index.js';
 
+/**
+ * ContextService — Servicio encargado de construir el contexto que se le proporciona
+ * al modelo de IA antes de generar una respuesta.
+ *
+ * El contexto es información real de la base de datos (datos del estudiante, proyectos
+ * del sistema, instituciones, etc.) que se inyecta en el prompt para que la IA pueda
+ * dar respuestas personalizadas y relevantes.
+ */
 export class ContextService {
+    // Instrucción de sistema estática: define el rol y comportamiento base del chatbot
     static SYSTEM_CONTEXT = `...`; // Tu SYSTEM_CONTEXT original
 
+    /**
+     * Obtiene el contexto personal del estudiante desde la base de datos.
+     * Incluye: nombre, carrera, escuela, habilidades registradas y proyectos en los que participa.
+     * Este contexto se usa para personalizar la respuesta de la IA según el perfil del usuario.
+     *
+     * @param {number} usuarioId - ID del usuario en la base de datos
+     * @returns {Promise<Object|null>} - Objeto con los datos del estudiante, o null si no existe
+     */
     async getStudentContext(usuarioId) {
 
         try {
             console.log('Obteniendo contexto del estudiante con ID:', usuarioId);
+
+            // Consulta al usuario junto con todas sus relaciones relevantes para la IA
             const estudiante = await Usuarios.findByPk(usuarioId, {
                 include: [
-                    // incluir las habilidades del usuario
-                    // Incluir las habilidades del usuario
+                    // Habilidades del estudiante (relación N:M a través de UsuariosHabilidades)
                     {
                         model: Habilidades,
-                        as: 'Habilidades', // Este es el alias que deberías usar (o el que definiste en la asociación)
+                        as: 'Habilidades',
                         through: {
                             model: UsuariosHabilidades,
-                            as: 'usuariosHabilidades' // Alias para la tabla intermedia
+                            as: 'usuariosHabilidades'
                         },
                     },
+                    // Perfil del estudiante con carrera y escuela anidadas
                     {
                         model: PerfilUsuario,
-                        as: 'perfil', // Alias definido en la asociación de Usuarios
+                        as: 'perfil',
                         include: [
                             {
                                 model: Carreras,
-                                as: 'carrera', // Alias definido en la asociación de PerfilUsuario
+                                as: 'carrera',
                                 include: [
                                     {
                                         model: Escuelas,
-                                        as: 'escuela' // Alias definido en la asociación de Carreras (si existe)
+                                        as: 'escuela'
                                     }
                                 ]
                             }
                         ]
                     },
+                    // Proyectos a los que el estudiante ha aplicado (con institución incluida)
                     {
                         model: AplicacionesEstudiantes,
-                        as: 'aplicacionesEstudiantes', // Alias definido en la asociación de Usuarios
+                        as: 'aplicacionesEstudiantes',
                         include: [
                             {
                                 model: ProyectosInstitucion,
-                                as: 'proyecto', // Alias definido en la asociación de AplicacionesEstudiantes
+                                as: 'proyecto',
                                 include: [
                                     {
                                         model: Instituciones,
-                                        as: 'institucion' // Alias definido en la asociación de ProyectosInstitucion
+                                        as: 'institucion'
                                     }
                                 ]
                             }
@@ -63,11 +83,9 @@ export class ContextService {
                 console.log('Usuario no encontrado');
                 return null;
             }
-            // Imprimir el estudiante para depuración
             console.log('Estudiante encontrado:', JSON.stringify(estudiante, null, 2));
 
-
-            // Extraer datos
+            // Extrae y formatea los datos relevantes en un objeto plano para el prompt
             const perfil = estudiante.perfil;
             const aplicaciones = estudiante.aplicacionesEstudiantes;
             return {
@@ -76,11 +94,11 @@ export class ContextService {
                 carrera: perfil?.carrera?.nombre || 'No especificada',
                 escuela: perfil?.carrera?.escuela?.nombre || 'No especificada',
                 añoAcademico: perfil?.año_academico || 'No especificado',
-                habilidades: estudiante.Habilidades.map(h => h.descripcion), // Asumiendo que 'nombre' es un campo en Habilidades
+                habilidades: estudiante.Habilidades.map(h => h.descripcion),
                 proyectos: aplicaciones.map(app => ({
                     nombre: app.proyecto.nombre,
                     institucion: app.proyecto.institucion.nombre,
-                    estado: app.estado // Asumiendo que 'estado' es un campo en AplicacionesEstudiantes
+                    estado: app.estado
                 }))
             };
         } catch (error) {
@@ -89,40 +107,49 @@ export class ContextService {
         }
     }
 
+    /**
+     * Obtiene el contexto general del sistema desde la base de datos.
+     * Incluye: todos los proyectos disponibles, instituciones y carreras.
+     * Esto permite que la IA conozca qué opciones existen en el sistema
+     * aunque el estudiante no esté inscrito en ellas.
+     *
+     * @returns {Promise<Object>} - Objeto con listas de proyectos, instituciones y carreras
+     */
     async getSystemContext() {
 
-        // peticion de proyectos
+        // Proyectos disponibles con su institución asociada
         const proyectos = await ProyectosInstitucion.findAll({
             include: [
                 {
                     model: Instituciones,
-                    as: 'institucion', // Alias definido en la asociación de ProyectosInstitucion
+                    as: 'institucion',
                     attributes: ['id', 'nombre']
                 }
             ]
         });
 
-        // peticion de instituciones
+        // Todas las instituciones registradas
         const instituciones = await Instituciones.findAll({
             attributes: ['id', 'nombre']
         });
-        // peticion de carreras
+
+        // Todas las carreras con su escuela
         const carreras = await Carreras.findAll({
             include: [
                 {
                     model: Escuelas,
-                    as: 'escuela', // Alias definido en la asociación de Carreras
+                    as: 'escuela',
                     attributes: ['id', 'nombre']
                 }
             ],
             attributes: ['id', 'nombre']
         });
 
-        // retornar el contexto del sistema
+        // Retorna los datos en formato simplificado para insertar en el prompt
         return {
             proyectos: proyectos.map(p => ({
                 id: p.id,
-                nombre: p.nombre// Asumiendo que 'descripcion' es el campo en Habilidades
+                nombre: p.nombre
             })),
             instituciones: instituciones.map(i => ({
                 id: i.id,
@@ -131,27 +158,40 @@ export class ContextService {
             carreras: carreras.map(c => ({
                 id: c.id,
                 nombre: c.nombre,
-                escuela: c.escuela ? c.escuela.nombre : 'No especificada' // Manejo de escuela opcional
+                escuela: c.escuela ? c.escuela.nombre : 'No especificada'
             }))
         };
     }
 
+    /**
+     * Construye el prompt completo que se enviará al modelo de IA.
+     * Combina: instrucciones del sistema + contexto del estudiante +
+     * contexto del sistema + historial de conversación + mensaje actual.
+     *
+     * @param {string} message - El mensaje nuevo del usuario
+     * @param {Object} context - Contexto personal del estudiante (de getStudentContext)
+     * @param {Array} history - Historial de mensajes anteriores de la conversación
+     * @param {Object} sistemaContext - Contexto general del sistema (de getSystemContext)
+     * @returns {string} - El prompt final listo para enviar a Gemini
+     */
     buildPrompt(message, context, history, sistemaContext) {
-        let prompt = `Eres **CHAT FELIZ**, asistente virtual de la ITCA FEPADE. 
+        // Instrucciones base del chatbot (personalidad, formato, reglas)
+        let prompt = `Eres **CHAT FELIZ**, asistente virtual de la ITCA FEPADE.
                    Reglas estrictas:
                    1. Presentarte siempre como "CHAT FELIZ" en tu primera respuesta
                    2. Usar emojis educativos relevantes (📚, ✏️)
-                   3. Formato: 
+                   3. Formato:
                       - Párrafos breves
                       - Negritas para términos importantes
                       - Viñetas para listas
-                   Ejemplo de respuesta: 
-                   "¡Hola José! 👋 Soy **CHAT FELIZ**, tu asistente de ITCA FEPADE. 
+                   Ejemplo de respuesta:
+                   "¡Hola José! 👋 Soy **CHAT FELIZ**, tu asistente de ITCA FEPADE.
                    Sobre desarrollo de software..."
-                   
+
                    -si ya le diste el saludo inicial al usuario, no vuelvas a saludarlo ni te presentés de nuevo.
                    `;
 
+        // Si existe contexto del estudiante, se inyecta en el prompt para personalizar la respuesta
         if (context) {
             prompt += `\n\nInformación del usuario:
     - Proyectos del sistema: ${sistemaContext.proyectos.map(p => p.nombre).join(', ') || 'No especificados'}
@@ -161,9 +201,10 @@ export class ContextService {
     - Escuela: ${context.escuela}
     - Habilidades: ${context.habilidades.join(', ') || 'No especificadas'}
     - Proyectos: ${context.proyectos.length > 0 ? context.proyectos.map(p => `${p.nombre} (${p.institucion})`).join(', ') : 'No especificados'}
-    - Año académico: ${context.añoAcademico || 'No especificado'}  
+    - Año académico: ${context.añoAcademico || 'No especificado'}
     - Año académico: ${context.añoAcademico}`;
 
+            // Si el estudiante tiene proyectos, se listan con su estado de aplicación
             if (context.proyectos.length > 0) {
                 prompt += `\n\nProyectos en los que participa:`;
                 context.proyectos.forEach(proyecto => {
@@ -172,6 +213,7 @@ export class ContextService {
             }
         }
 
+        // Agrega el historial de la conversación para que la IA mantenga coherencia entre mensajes
         if (history && history.length > 0) {
             prompt += `\n\nHistorial de la conversación:`;
             history.reverse().forEach(msg => {
@@ -180,6 +222,7 @@ export class ContextService {
             });
         }
 
+        // Agrega el mensaje nuevo del usuario al final del prompt
         prompt += `\n\nNuevo mensaje del usuario: ${message}`;
         prompt += `\nRespuesta del asistente:`;
 

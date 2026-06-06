@@ -1,7 +1,27 @@
 import { sendMessage, getConversationHistory, startConversation, deleteConversation } from '../controllers/chatbotController.js';
 
+/**
+ * chatbotRoutes — Define los endpoints HTTP del chatbot de IA.
+ *
+ * Todos los endpoints usan el prefijo /api (configurado en app.js), por lo que
+ * las rutas reales son: /api/chatbot/start, /api/chatbot/message, etc.
+ *
+ * Flujo típico de uso:
+ *  1. POST /api/chatbot/start       → Obtener un conversationId
+ *  2. POST /api/chatbot/message     → Enviar mensajes usando ese conversationId
+ *  3. GET  /api/chatbot/history/:id → Consultar el historial si se necesita
+ *  4. DELETE /api/chatbot/conversations/:id → Limpiar la conversación al finalizar
+ *
+ * @param {FastifyInstance} fastify - Instancia de Fastify inyectada automáticamente
+ * @param {Object} options - Opciones del plugin (no usadas aquí)
+ */
 async function chatbotRoutes(fastify, options) {
-  // Iniciar nueva conversación
+
+  /**
+   * POST /api/chatbot/start
+   * Inicia una nueva sesión de conversación con el chatbot.
+   * Devuelve un `conversationId` que el cliente debe usar en los siguientes mensajes.
+   */
   fastify.post('/chatbot/start', {
     schema: {
       description: 'Iniciar una nueva conversación con el chatbot',
@@ -9,9 +29,9 @@ async function chatbotRoutes(fastify, options) {
       body: {
         type: 'object',
         properties: {
-          usuarioId: { 
+          usuarioId: {
             type: 'number',
-            description: 'ID del usuario que inicia la conversación' 
+            description: 'ID del usuario que inicia la conversación'
           }
         },
         required: ['usuarioId']
@@ -21,8 +41,8 @@ async function chatbotRoutes(fastify, options) {
           description: 'Conversación iniciada exitosamente',
           type: 'object',
           properties: {
-            conversationId: { type: 'string' },
-            welcomeMessage: { type: 'string' },
+            conversationId: { type: 'string' },    // ID único a guardar en el cliente
+            welcomeMessage: { type: 'string' },    // Primer mensaje del bot
             usuario: {
               type: 'object',
               properties: {
@@ -39,65 +59,75 @@ async function chatbotRoutes(fastify, options) {
     }
   }, startConversation);
 
-fastify.post('/chatbot/message', {
-  schema: {
-    description: 'Enviar mensaje al chatbot',
-    tags: ['Chatbot'],
-    body: {
-      type: 'object',
-      required: ['message', 'usuarioId', 'conversationId'],
-      properties: {
-        message: { 
-          type: 'string',
-          description: 'Contenido del mensaje',
-          minLength: 1
-        },
-        usuarioId: { 
-          type: 'integer',
-          description: 'ID del usuario',
-          minimum: 1
-        },
-        conversationId: {
-          type: 'string',
-          description: 'ID de la conversación',
-          pattern: '^conv_[a-zA-Z0-9_]+$' // Ejemplo de patrón para validar formato
-        }
-      }
-    },
-    response: {
-      201: {
-        description: 'Mensaje procesado exitosamente',
+  /**
+   * POST /api/chatbot/message
+   * Envía un mensaje al chatbot y recibe la respuesta generada por Gemini.
+   * Requiere el `conversationId` obtenido en /chatbot/start para mantener contexto.
+   */
+  fastify.post('/chatbot/message', {
+    schema: {
+      description: 'Enviar mensaje al chatbot',
+      tags: ['Chatbot'],
+      body: {
         type: 'object',
+        required: ['message', 'usuarioId', 'conversationId'],
         properties: {
-          success: { type: 'boolean' },
           message: {
-            type: 'object',
-            properties: {
-              id: { type: 'string' },
-              conversationId: { type: 'string' },
-              userMessage: { type: 'string' },
-              botResponse: { type: 'string' },
-              timestamp: { type: 'string', format: 'date-time' }
-            }
+            type: 'string',
+            description: 'Contenido del mensaje del usuario',
+            minLength: 1
           },
-          context: {
-            type: 'object',
-            properties: {
-              escuela: { type: 'string' },
-              carrera: { type: 'string' }
-            }
+          usuarioId: {
+            type: 'integer',
+            description: 'ID del usuario que envía el mensaje',
+            minimum: 1
+          },
+          conversationId: {
+            type: 'string',
+            description: 'ID de la sesión de conversación (obtenido en /chatbot/start)',
+            pattern: '^conv_[a-zA-Z0-9_]+$' // Valida el formato del conversationId
           }
         }
       },
-      400: { $ref: 'ErrorResponse' },
-      403: { $ref: 'ErrorResponse' },
-      404: { $ref: 'ErrorResponse' },
-      500: { $ref: 'ErrorResponse' }
+      response: {
+        201: {
+          description: 'Mensaje procesado exitosamente',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean' },
+            message: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                conversationId: { type: 'string' },
+                userMessage: { type: 'string' },  // El mensaje que envió el usuario
+                botResponse: { type: 'string' },  // La respuesta generada por la IA
+                timestamp: { type: 'string', format: 'date-time' }
+              }
+            },
+            // Contexto adicional retornado para debug/uso del cliente
+            context: {
+              type: 'object',
+              properties: {
+                escuela: { type: 'string' },
+                carrera: { type: 'string' }
+              }
+            }
+          }
+        },
+        400: { $ref: 'ErrorResponse' }, // Campos faltantes o mensaje vacío
+        403: { $ref: 'ErrorResponse' }, // Usuario no es dueño de la conversación
+        404: { $ref: 'ErrorResponse' }, // Usuario no encontrado
+        500: { $ref: 'ErrorResponse' }  // Error al llamar a la IA o BD
+      }
     }
-  }
-}, sendMessage);
+  }, sendMessage);
 
-  // Obtener historial
+  /**
+   * GET /api/chatbot/history/:conversationId
+   * Retorna el historial completo de mensajes de una conversación.
+   * Útil para restaurar el chat si el usuario cierra y reabre la aplicación.
+   */
   fastify.get('/chatbot/history/:conversationId', {
     schema: {
       description: 'Obtener el historial completo de una conversación',
@@ -105,9 +135,9 @@ fastify.post('/chatbot/message', {
       params: {
         type: 'object',
         properties: {
-          conversationId: { 
+          conversationId: {
             type: 'string',
-            description: 'ID de la conversación' 
+            description: 'ID de la conversación a consultar'
           }
         },
         required: ['conversationId']
@@ -124,6 +154,7 @@ fastify.post('/chatbot/message', {
             endTime: { type: 'string', format: 'date-time', nullable: true },
             created_at: { type: 'string', format: 'date-time' },
             updated_at: { type: 'string', format: 'date-time' },
+            // Lista de todos los mensajes de la conversación en orden cronológico
             conversations: {
               type: 'array',
               items: { $ref: 'Conversation' }
@@ -150,7 +181,11 @@ fastify.post('/chatbot/message', {
     }
   }, getConversationHistory);
 
-  // Eliminar conversación
+  /**
+   * DELETE /api/chatbot/conversations/:conversationId
+   * Elimina una conversación completa (sesión + todos sus mensajes).
+   * Solo el usuario dueño puede eliminar su propia conversación.
+   */
   fastify.delete('/chatbot/conversations/:conversationId', {
     schema: {
       description: 'Eliminar una conversación completa',
@@ -158,9 +193,9 @@ fastify.post('/chatbot/message', {
       params: {
         type: 'object',
         properties: {
-          conversationId: { 
+          conversationId: {
             type: 'string',
-            description: 'ID de la conversación a eliminar' 
+            description: 'ID de la conversación a eliminar'
           }
         },
         required: ['conversationId']
@@ -168,7 +203,7 @@ fastify.post('/chatbot/message', {
       response: {
         204: {
           description: 'Conversación eliminada exitosamente',
-          type: 'null'
+          type: 'null' // 204 no retorna contenido
         },
         404: { $ref: 'ErrorResponse' },
         500: { $ref: 'ErrorResponse' }
