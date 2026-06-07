@@ -1,5 +1,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { Op } from 'sequelize';
 import config from '../config/config.js';
+import { cache, TTL } from '../services/CacheService.js';
 import {
     Habilidades,
     UsuariosHabilidades,
@@ -9,33 +11,24 @@ import {
 
 /**
  * Ejecuta una función async con reintentos y backoff exponencial.
- * Diseñado para errores transitorios de APIs externas (503, 429).
- *
- * Tiempos de espera: intento 1 → 1s, intento 2 → 2s, intento 3 → 4s.
- *
- * @param {Function} fn - Función async a ejecutar
- * @param {number} maxAttempts - Número máximo de intentos (default: 3)
- * @param {number} baseDelayMs - Delay base en ms para el backoff (default: 1000)
+ * Solo reintenta errores transitorios (503, y 429 con delay sugerido corto).
+ * El 429 por quota diaria tiene delay de 25s+ y NO se reintenta.
  */
 async function withRetry(fn, maxAttempts = 3, baseDelayMs = 1000) {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
             return await fn();
         } catch (error) {
-            // Solo reintenta en errores transitorios de disponibilidad
-            // El 429 por quota diaria (free tier) tiene retryDelay de 25s+.
-        // Reintentarlo en 1-4s es inútil y consume más quota.
-        // Solo se reintenta el 429 si el delay sugerido es corto (< 10s).
-        const retryDelayMatch = error?.message?.match(/retry in (\d+(\.\d+)?)s/i);
-        const suggestedDelaySecs = retryDelayMatch ? parseFloat(retryDelayMatch[1]) : 0;
+            const retryDelayMatch = error?.message?.match(/retry in (\d+(\.\d+)?)s/i);
+            const suggestedDelaySecs = retryDelayMatch ? parseFloat(retryDelayMatch[1]) : 0;
 
-        const isTransient =
+            const isTransient =
                 (error?.message?.includes('503') || error?.message?.includes('Service Unavailable')) ||
                 (error?.message?.includes('429') && suggestedDelaySecs < 10);
 
             if (!isTransient || attempt === maxAttempts) throw error;
 
-            const delayMs = baseDelayMs * Math.pow(2, attempt - 1); // 1s, 2s, 4s
+            const delayMs = baseDelayMs * Math.pow(2, attempt - 1);
             console.warn(`Gemini no disponible (intento ${attempt}/${maxAttempts}). Reintentando en ${delayMs}ms...`);
             await new Promise(resolve => setTimeout(resolve, delayMs));
         }
@@ -43,34 +36,31 @@ async function withRetry(fn, maxAttempts = 3, baseDelayMs = 1000) {
 }
 
 // Instancia de Gemini dedicada al motor de recomendaciones.
-// Se separa del cliente del chatbot para tener su propia systemInstruction
-// sin afectar la configuración existente en chatbotController.js.
 const genAI = new GoogleGenerativeAI(config.google.ai.apiKey);
 const recomendacionModel = genAI.getGenerativeModel({
-    // gemini-2.5-flash: disponible en API v1 estable, 1,500 req/día en free tier.
     model: 'gemini-2.5-flash',
     generationConfig: {
-        maxOutputTokens: 4096,
-        temperature: 0.2, // Baja temperatura: respuestas más deterministas y consistentes para JSON
+        maxOutputTokens: 2048, // 3 recomendaciones no necesitan más
+        temperature: 0.2,
     },
     systemInstruction: {
         parts: [{
             text: `Eres un motor de recomendación de proyectos de Servicio Social Estudiantil (SSE).
-Recibes las habilidades de un estudiante y una lista de proyectos disponibles.
-Tu tarea es recomendar los 3 proyectos más adecuados.
+Los proyectos que recibes ya fueron pre-seleccionados porque coinciden con las habilidades del estudiante.
+Tu tarea es elegir los 3 más adecuados basándote en análisis semántico de descripcion, actividad_principal y modalidad.
 
 CRITERIOS DE ANÁLISIS:
-1. Coincidencia semántica: evalúa si las habilidades del estudiante son relevantes para el contexto y descripción de cada proyecto.
-2. Transferibilidad: considera si las habilidades pueden aplicarse aunque no sean mencionadas textualmente en el proyecto.
-3. Potencial de aporte: evalúa cuánto puede contribuir el estudiante al proyecto.
+1. Relevancia semántica: ¿el entorno del proyecto aprovecha las habilidades del estudiante?
+2. Actividad principal: ¿es compatible con el perfil del estudiante?
+3. Modalidad: considérala como factor de accesibilidad.
 
 REGLAS ESTRICTAS:
-- Responde ÚNICAMENTE con JSON puro y válido. Sin texto, sin markdown, sin bloques de código, sin explicaciones fuera del JSON.
+- Responde ÚNICAMENTE con JSON puro y válido. Sin texto, sin markdown, sin bloques de código.
 - Recomienda exactamente 3 proyectos. Si hay menos de 3 disponibles, devuelve los que existan.
 - Los proyecto_id deben ser exactamente los IDs recibidos en el input; nunca inventes IDs.
-- La justificacion debe estar en español, en segunda persona (tú), ser motivadora y tener máximo 1 oración breve.
-- porcentaje_compatibilidad es un número entero entre 0 y 100.
-- habilidades_aplicables: lista de strings con las habilidades del estudiante que aplican al proyecto (máximo 4).
+- justificacion: en español, segunda persona (tú), motivadora, máximo 1 oración breve.
+- porcentaje_compatibilidad: número entero entre 0 y 100.
+- habilidades_aplicables: máximo 3 strings tomados de las habilidades del estudiante que más aplican.
 
 FORMATO DE RESPUESTA OBLIGATORIO:
 {
@@ -82,7 +72,7 @@ FORMATO DE RESPUESTA OBLIGATORIO:
       "modalidad": "Presencial",
       "habilidades_aplicables": ["Comunicación", "Trabajo en equipo"],
       "porcentaje_compatibilidad": 82,
-      "justificacion": "Tu perfil encaja muy bien con los objetivos de este proyecto. Podrás aportar valor desde el primer día."
+      "justificacion": "Tu perfil encaja perfectamente con las actividades de este proyecto."
     }
   ]
 }`
@@ -90,9 +80,79 @@ FORMATO DE RESPUESTA OBLIGATORIO:
     }
 });
 
+// ── HISTORIAL DE RECOMENDACIONES ─────────────────────────────────────────────
+// Guarda en cache los proyecto_id ya recomendados para no repetirlos en la próxima
+// llamada a Gemini. TTL de 7 días para que persista entre sesiones del estudiante.
+// Se mantienen máximo 6 IDs (las últimas 2 rondas de 3 recomendaciones).
+
+function getHistorialRecomendados(usuarioId) {
+    return cache.get(`recomendacion_historial:${usuarioId}`) ?? [];
+}
+
+function actualizarHistorial(usuarioId, nuevosIds) {
+    const actual = getHistorialRecomendados(usuarioId);
+    // FIFO: agrega al final, mantiene solo los últimos 6 (2 rondas × 3)
+    const actualizado = [...actual, ...nuevosIds].slice(-6);
+    cache.set(`recomendacion_historial:${usuarioId}`, actualizado, TTL.RECOMENDACION_HISTORIAL);
+}
+
+// Reset parcial: elimina los 3 más antiguos para abrir espacio cuando no hay proyectos nuevos.
+// Si quedan ≤3 en historial, limpia todo para evitar quedarse sin opciones.
+function resetParcialHistorial(usuarioId) {
+    const actual = getHistorialRecomendados(usuarioId);
+    if (actual.length <= 3) {
+        cache.delete(`recomendacion_historial:${usuarioId}`);
+        return [];
+    }
+    const reducido = actual.slice(3);
+    cache.set(`recomendacion_historial:${usuarioId}`, reducido, TTL.RECOMENDACION_HISTORIAL);
+    return reducido;
+}
+
+// ── QUERY PRE-FILTRADA ────────────────────────────────────────────────────────
+// INNER JOIN con Habilidades: solo devuelve proyectos que tengan al menos 1 habilidad
+// en común con el estudiante. El ranking semántico fino lo hace Gemini sobre estos 10.
+
+async function consultarProyectosCompatibles(habilidadIds, excluirIds) {
+    return ProyectosInstitucion.findAll({
+        where: {
+            estado: 'Aprobado',
+            disponibilidad: true,
+            ...(excluirIds.length && { id: { [Op.notIn]: excluirIds } })
+        },
+        include: [
+            {
+                model: Instituciones,
+                as: 'institucion',
+                attributes: ['nombre']
+            },
+            {
+                // INNER JOIN: filtra proyectos cuyas habilidades requeridas
+                // coincidan con al menos una habilidad del estudiante.
+                // required: true hace el JOIN obligatorio (excluye proyectos sin match).
+                model: Habilidades,
+                through: { attributes: [] },
+                attributes: [],
+                where: { id: { [Op.in]: habilidadIds } },
+                required: true
+            }
+        ],
+        attributes: ['id', 'nombre', 'descripcion', 'actividad_principal', 'modalidad'],
+        distinct: true, // Evita duplicados cuando un proyecto coincide con múltiples habilidades
+        limit: 10,
+        subQuery: false
+    });
+}
+
 /**
  * Recomienda los 3 proyectos más compatibles con las habilidades de un estudiante.
- * Usa Gemini para hacer el análisis semántico entre habilidades y proyectos.
+ *
+ * Flujo:
+ *  1. Cache hit → respuesta inmediata (24h TTL)
+ *  2. Cache miss → pre-filtro SQL por habilidades + exclusión de historial
+ *  3. Si quedan <3 proyectos → reset parcial del historial → reintento
+ *  4. Llamada a Gemini con payload reducido (sin habilidades_requeridas de proyectos)
+ *  5. Guardar resultado en cache + actualizar historial
  *
  * @route POST /api/recomendar-proyectos
  */
@@ -101,6 +161,13 @@ export async function recomendarProyectos(request, reply) {
 
     if (!usuario_id) {
         return reply.status(400).send({ error: 'El campo usuario_id es obligatorio' });
+    }
+
+    // ── CACHE: Resultado guardado por 24 horas ────────────────────────────────
+    const cacheKey = `recomendacion_resultado:${usuario_id}`;
+    const cached = cache.get(cacheKey);
+    if (cached && !_debug) {
+        return reply.status(200).send(cached);
     }
 
     try {
@@ -117,59 +184,45 @@ export async function recomendarProyectos(request, reply) {
             });
         }
 
-        const habilidades_estudiante = usuarioHabilidades.map(uh => ({
-            habilidad_id: uh.habilidad_id,
-            descripcion: uh.habilidad.descripcion
-        }));
+        const habilidadIds = usuarioHabilidades.map(uh => uh.habilidad_id);
+        // Solo nombres para Gemini (sin IDs — el pre-filtro SQL ya usó los IDs)
+        const habilidadesNombres = usuarioHabilidades.map(uh => uh.habilidad.descripcion);
 
-        // ── PASO 2: Proyectos disponibles ─────────────────────────────────────
-        // Se incluyen las Habilidades requeridas del proyecto (via ProyectosInstitucionesHabilidades)
-        // para que Gemini pueda hacer un análisis más preciso.
-        const proyectosDB = await ProyectosInstitucion.findAll({
-            where: { estado: 'Aprobado', disponibilidad: true },
-            include: [
-                {
-                    model: Instituciones,
-                    as: 'institucion',
-                    attributes: ['nombre']
-                },
-                {
-                    // Habilidades requeridas por el proyecto — enriquece el análisis de Gemini
-                    model: Habilidades,
-                    through: { attributes: [] }, // Oculta los campos de la tabla pivot
-                    attributes: ['id', 'descripcion']
-                }
-            ],
-            limit: 15,
-            order: [['created_at', 'DESC']]
-        });
+        // ── PASO 2: Proyectos pre-filtrados por habilidad, excluyendo historial ─
+        let excluirIds = getHistorialRecomendados(usuario_id);
+        let proyectosDB = await consultarProyectosCompatibles(habilidadIds, excluirIds);
+
+        // Si quedan menos de 3 opciones, el historial está muy lleno:
+        // se hace un reset parcial (elimina los 3 más antiguos) y se reintenta.
+        if (proyectosDB.length < 3 && excluirIds.length > 0) {
+            excluirIds = resetParcialHistorial(usuario_id);
+            proyectosDB = await consultarProyectosCompatibles(habilidadIds, excluirIds);
+        }
 
         if (!proyectosDB.length) {
             return reply.status(200).send({
                 recomendaciones: [],
-                mensaje: 'No hay proyectos disponibles actualmente'
+                mensaje: 'No hay proyectos disponibles que coincidan con tus habilidades'
             });
         }
 
-        // Formatea los proyectos en un payload limpio para enviar a Gemini
+        // ── PASO 3: Payload para Gemini (reducido) ────────────────────────────
+        // Se omiten las habilidades_requeridas de los proyectos: el pre-filtro SQL
+        // ya garantizó la coincidencia. Gemini analiza descripcion + actividad_principal.
         const proyectos = proyectosDB.map(p => ({
             id: p.id,
             nombre: p.nombre,
             descripcion: p.descripcion?.slice(0, 200),
+            actividad_principal: p.actividad_principal,
             modalidad: p.modalidad,
-            institucion: p.institucion?.nombre ?? 'No especificada',
-            // Si el proyecto tiene habilidades requeridas registradas, se incluyen
-            habilidades_requeridas: p.Habilidades?.map(h => h.descripcion) ?? []
+            institucion: p.institucion?.nombre ?? 'No especificada'
         }));
 
-        // ── PASO 3: Llamada a Gemini ──────────────────────────────────────────
-        // El payload se envía como JSON en el mensaje del usuario.
-        // La systemInstruction ya le indica al modelo el formato de respuesta esperado.
-        const prompt = JSON.stringify({ habilidades_estudiante, proyectos });
+        const prompt = JSON.stringify({ habilidades_estudiante: habilidadesNombres, proyectos });
 
+        // ── PASO 4: Llamada a Gemini ──────────────────────────────────────────
         let geminiResponse;
         try {
-            // withRetry reintenta hasta 3 veces si Gemini responde 503/429
             const result = await withRetry(() => recomendacionModel.generateContent(prompt));
             geminiResponse = result.response.text();
         } catch (geminiError) {
@@ -180,9 +233,7 @@ export async function recomendarProyectos(request, reply) {
             });
         }
 
-        // ── PASO 4: Parsear y validar la respuesta ────────────────────────────
-        // Gemini a veces envuelve la respuesta en bloques markdown (```json ... ```)
-        // aunque se le instruya no hacerlo. Se limpian antes de parsear.
+        // ── PASO 5: Parsear y validar respuesta ───────────────────────────────
         const cleanedResponse = geminiResponse
             .replace(/^```(?:json)?\s*\n?/i, '')
             .replace(/\n?```\s*$/i, '')
@@ -191,9 +242,6 @@ export async function recomendarProyectos(request, reply) {
         let parsed;
         try {
             parsed = JSON.parse(cleanedResponse);
-
-            // Si Gemini devolvió un array en lugar del objeto esperado, normalizarlo.
-            // Además remapea "id" → "proyecto_id" por si el modelo ignoró el nombre del campo.
             if (Array.isArray(parsed)) {
                 parsed = {
                     recomendaciones: parsed.map(item => ({
@@ -202,7 +250,7 @@ export async function recomendarProyectos(request, reply) {
                     }))
                 };
             }
-        } catch (parseError) {
+        } catch {
             console.error('Respuesta de Gemini no es JSON válido:', cleanedResponse);
             return reply.status(500).send({
                 error: 'Error al procesar recomendaciones',
@@ -210,35 +258,28 @@ export async function recomendarProyectos(request, reply) {
             });
         }
 
-        // Normaliza proyecto_id en caso de que el objeto también traiga "id" en lugar de "proyecto_id"
         parsed.recomendaciones = (parsed.recomendaciones ?? []).map(r => ({
             ...r,
             proyecto_id: r.proyecto_id ?? r.id
         }));
 
-        // Filtra recomendaciones con proyecto_id que no existan en la lista original.
-        // Se usan Number() en ambos lados porque Gemini a veces devuelve IDs como strings
-        // y Set.has() usa igualdad estricta, entonces has("29") falla si el Set tiene 29.
         const idsValidos = new Set(proyectosDB.map(p => Number(p.id)));
-        const antesDelFiltro = parsed.recomendaciones.map(r => ({
-            proyecto_id: r.proyecto_id,
-            tipo: typeof r.proyecto_id
-        }));
-
         parsed.recomendaciones = parsed.recomendaciones.filter(r =>
             idsValidos.has(Number(r.proyecto_id))
         );
 
+        // ── PASO 6: Guardar cache (24h) y actualizar historial ────────────────
         const respuesta = { ...parsed };
+        cache.set(cacheKey, respuesta, TTL.RECOMENDACION);
 
-        // Modo debug: incluir info interna para diagnosticar filtros vacíos.
-        // Activar enviando _debug: true en el body. Quitar antes de producción final.
+        const idsRecomendados = parsed.recomendaciones.map(r => Number(r.proyecto_id));
+        actualizarHistorial(usuario_id, idsRecomendados);
+
         if (_debug) {
             respuesta._debug = {
-                ids_validos: [...idsValidos],
-                gemini_raw: cleanedResponse.slice(0, 500),
-                antes_del_filtro: antesDelFiltro,
-                despues_del_filtro: parsed.recomendaciones.map(r => r.proyecto_id)
+                ids_excluidos_por_historial: excluirIds,
+                proyectos_enviados_a_gemini: proyectos.map(p => ({ id: p.id, nombre: p.nombre })),
+                gemini_raw: cleanedResponse.slice(0, 500)
             };
         }
 

@@ -107,6 +107,8 @@ export const cache = new CacheService();
  *   durante una sesión activa. 5 minutos balancea frescura vs. rendimiento.
  */
 export const TTL = {
-    SYSTEM_CONTEXT: 10 * 60 * 1000,  // 10 minutos
-    STUDENT_CONTEXT: 5 * 60 * 1000,  //  5 minutos
+    SYSTEM_CONTEXT: 10 * 60 * 1000,                    // 10 minutos
+    STUDENT_CONTEXT: 5 * 60 * 1000,                    //  5 minutos
+    RECOMENDACION: 24 * 60 * 60 * 1000,                // 24 horas — resultado completo por usuario
+    RECOMENDACION_HISTORIAL: 7 * 24 * 60 * 60 * 1000, //  7 días  — IDs ya recomendados (evita repetición)
 };
