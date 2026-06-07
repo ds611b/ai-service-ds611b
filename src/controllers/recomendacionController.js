@@ -218,7 +218,12 @@ export async function recomendarProyectos(request, reply) {
             institucion: p.institucion?.nombre ?? 'No especificada'
         }));
 
-        const prompt = JSON.stringify({ habilidades_estudiante: habilidadesNombres, proyectos });
+        // La instrucción de formato se incluye en el mensaje además de en systemInstruction,
+        // porque Gemini a veces ignora systemInstruction y responde en lenguaje natural.
+        const prompt = `Analiza los siguientes datos y devuelve ÚNICAMENTE el JSON según el formato de tus instrucciones. Sin texto, sin markdown, sin explicaciones fuera del JSON.
+
+DATOS:
+${JSON.stringify({ habilidades_estudiante: habilidadesNombres, proyectos })}`;
 
         // ── PASO 4: Llamada a Gemini ──────────────────────────────────────────
         let geminiResponse;
