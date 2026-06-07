@@ -23,11 +23,15 @@ async function withRetry(fn, maxAttempts = 3, baseDelayMs = 1000) {
             return await fn();
         } catch (error) {
             // Solo reintenta en errores transitorios de disponibilidad
-            const isTransient =
-                error?.message?.includes('503') ||
-                error?.message?.includes('Service Unavailable') ||
-                error?.message?.includes('429') ||
-                error?.message?.includes('Too Many Requests');
+            // El 429 por quota diaria (free tier) tiene retryDelay de 25s+.
+        // Reintentarlo en 1-4s es inútil y consume más quota.
+        // Solo se reintenta el 429 si el delay sugerido es corto (< 10s).
+        const retryDelayMatch = error?.message?.match(/retry in (\d+(\.\d+)?)s/i);
+        const suggestedDelaySecs = retryDelayMatch ? parseFloat(retryDelayMatch[1]) : 0;
+
+        const isTransient =
+                (error?.message?.includes('503') || error?.message?.includes('Service Unavailable')) ||
+                (error?.message?.includes('429') && suggestedDelaySecs < 10);
 
             if (!isTransient || attempt === maxAttempts) throw error;
 
@@ -43,7 +47,9 @@ async function withRetry(fn, maxAttempts = 3, baseDelayMs = 1000) {
 // sin afectar la configuración existente en chatbotController.js.
 const genAI = new GoogleGenerativeAI(config.google.ai.apiKey);
 const recomendacionModel = genAI.getGenerativeModel({
-    model: 'gemini-2.5-flash',
+    // gemini-1.5-flash: 1,500 req/día en free tier vs 20 de gemini-2.5-flash.
+    // Para JSON estructurado la diferencia de calidad es mínima.
+    model: 'gemini-1.5-flash',
     generationConfig: {
         maxOutputTokens: 4096,
         temperature: 0.2, // Baja temperatura: respuestas más deterministas y consistentes para JSON
@@ -92,7 +98,7 @@ FORMATO DE RESPUESTA OBLIGATORIO:
  * @route POST /api/recomendar-proyectos
  */
 export async function recomendarProyectos(request, reply) {
-    const { usuario_id } = request.body;
+    const { usuario_id, _debug = false } = request.body;
 
     if (!usuario_id) {
         return reply.status(400).send({ error: 'El campo usuario_id es obligatorio' });
@@ -215,11 +221,29 @@ export async function recomendarProyectos(request, reply) {
         // Se usan Number() en ambos lados porque Gemini a veces devuelve IDs como strings
         // y Set.has() usa igualdad estricta, entonces has("29") falla si el Set tiene 29.
         const idsValidos = new Set(proyectosDB.map(p => Number(p.id)));
+        const antesDelFiltro = parsed.recomendaciones.map(r => ({
+            proyecto_id: r.proyecto_id,
+            tipo: typeof r.proyecto_id
+        }));
+
         parsed.recomendaciones = parsed.recomendaciones.filter(r =>
             idsValidos.has(Number(r.proyecto_id))
         );
 
-        return reply.status(200).send(parsed);
+        const respuesta = { ...parsed };
+
+        // Modo debug: incluir info interna para diagnosticar filtros vacíos.
+        // Activar enviando _debug: true en el body. Quitar antes de producción final.
+        if (_debug) {
+            respuesta._debug = {
+                ids_validos: [...idsValidos],
+                gemini_raw: cleanedResponse.slice(0, 500),
+                antes_del_filtro: antesDelFiltro,
+                despues_del_filtro: parsed.recomendaciones.map(r => r.proyecto_id)
+            };
+        }
+
+        return reply.status(200).send(respuesta);
 
     } catch (error) {
         console.error('Error al consultar datos para recomendaciones:', error);
