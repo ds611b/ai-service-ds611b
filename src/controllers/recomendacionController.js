@@ -155,9 +155,15 @@ export async function recomendarProyectos(request, reply) {
         try {
             parsed = JSON.parse(cleanedResponse);
 
-            // Si Gemini devolvió un array en lugar del objeto esperado, normalizarlo
+            // Si Gemini devolvió un array en lugar del objeto esperado, normalizarlo.
+            // Además remapea "id" → "proyecto_id" por si el modelo ignoró el nombre del campo.
             if (Array.isArray(parsed)) {
-                parsed = { recomendaciones: parsed };
+                parsed = {
+                    recomendaciones: parsed.map(item => ({
+                        ...item,
+                        proyecto_id: item.proyecto_id ?? item.id
+                    }))
+                };
             }
         } catch (parseError) {
             console.error('Respuesta de Gemini no es JSON válido:', cleanedResponse);
@@ -167,10 +173,16 @@ export async function recomendarProyectos(request, reply) {
             });
         }
 
+        // Normaliza proyecto_id en caso de que el objeto también traiga "id" en lugar de "proyecto_id"
+        parsed.recomendaciones = (parsed.recomendaciones ?? []).map(r => ({
+            ...r,
+            proyecto_id: r.proyecto_id ?? r.id
+        }));
+
         // Filtra recomendaciones con proyecto_id que no existan en la lista original
         // para evitar que Gemini invente IDs que no existen en la BD.
         const idsValidos = new Set(proyectosDB.map(p => p.id));
-        parsed.recomendaciones = (parsed.recomendaciones ?? []).filter(r =>
+        parsed.recomendaciones = parsed.recomendaciones.filter(r =>
             idsValidos.has(r.proyecto_id)
         );
 
