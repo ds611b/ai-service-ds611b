@@ -7,6 +7,37 @@ import {
     Instituciones,
 } from '../models/index.js';
 
+/**
+ * Ejecuta una función async con reintentos y backoff exponencial.
+ * Diseñado para errores transitorios de APIs externas (503, 429).
+ *
+ * Tiempos de espera: intento 1 → 1s, intento 2 → 2s, intento 3 → 4s.
+ *
+ * @param {Function} fn - Función async a ejecutar
+ * @param {number} maxAttempts - Número máximo de intentos (default: 3)
+ * @param {number} baseDelayMs - Delay base en ms para el backoff (default: 1000)
+ */
+async function withRetry(fn, maxAttempts = 3, baseDelayMs = 1000) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            return await fn();
+        } catch (error) {
+            // Solo reintenta en errores transitorios de disponibilidad
+            const isTransient =
+                error?.message?.includes('503') ||
+                error?.message?.includes('Service Unavailable') ||
+                error?.message?.includes('429') ||
+                error?.message?.includes('Too Many Requests');
+
+            if (!isTransient || attempt === maxAttempts) throw error;
+
+            const delayMs = baseDelayMs * Math.pow(2, attempt - 1); // 1s, 2s, 4s
+            console.warn(`Gemini no disponible (intento ${attempt}/${maxAttempts}). Reintentando en ${delayMs}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+    }
+}
+
 // Instancia de Gemini dedicada al motor de recomendaciones.
 // Se separa del cliente del chatbot para tener su propia systemInstruction
 // sin afectar la configuración existente en chatbotController.js.
@@ -32,7 +63,7 @@ REGLAS ESTRICTAS:
 - Responde ÚNICAMENTE con JSON puro y válido. Sin texto, sin markdown, sin bloques de código, sin explicaciones fuera del JSON.
 - Recomienda exactamente 3 proyectos. Si hay menos de 3 disponibles, devuelve los que existan.
 - Los proyecto_id deben ser exactamente los IDs recibidos en el input; nunca inventes IDs.
-- La justificacion debe estar en español, en segunda persona (tú), ser motivadora y tener máximo 2 oraciones.
+- La justificacion debe estar en español, en segunda persona (tú), ser motivadora y tener máximo 1 oración breve.
 - porcentaje_compatibilidad es un número entero entre 0 y 100.
 - habilidades_aplicables: lista de strings con las habilidades del estudiante que aplican al proyecto (máximo 4).
 
@@ -133,10 +164,11 @@ export async function recomendarProyectos(request, reply) {
 
         let geminiResponse;
         try {
-            const result = await recomendacionModel.generateContent(prompt);
+            // withRetry reintenta hasta 3 veces si Gemini responde 503/429
+            const result = await withRetry(() => recomendacionModel.generateContent(prompt));
             geminiResponse = result.response.text();
         } catch (geminiError) {
-            console.error('Error al llamar a Gemini:', geminiError);
+            console.error('Error al llamar a Gemini tras reintentos:', geminiError);
             return reply.status(500).send({
                 error: 'Error al procesar recomendaciones',
                 details: geminiError?.message ?? String(geminiError)
@@ -179,11 +211,12 @@ export async function recomendarProyectos(request, reply) {
             proyecto_id: r.proyecto_id ?? r.id
         }));
 
-        // Filtra recomendaciones con proyecto_id que no existan en la lista original
-        // para evitar que Gemini invente IDs que no existen en la BD.
-        const idsValidos = new Set(proyectosDB.map(p => p.id));
+        // Filtra recomendaciones con proyecto_id que no existan en la lista original.
+        // Se usan Number() en ambos lados porque Gemini a veces devuelve IDs como strings
+        // y Set.has() usa igualdad estricta, entonces has("29") falla si el Set tiene 29.
+        const idsValidos = new Set(proyectosDB.map(p => Number(p.id)));
         parsed.recomendaciones = parsed.recomendaciones.filter(r =>
-            idsValidos.has(r.proyecto_id)
+            idsValidos.has(Number(r.proyecto_id))
         );
 
         return reply.status(200).send(parsed);
