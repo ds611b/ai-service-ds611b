@@ -51,8 +51,8 @@ const genAI = new GoogleGenerativeAI(config.google.ai.apiKey);
  * Esta instancia se reutiliza en cada mensaje para no re-crear la conexión.
  */
 const aiModel = genAI.getGenerativeModel({
-  // gemini-1.5-flash: 1,500 req/día en free tier vs 20 de gemini-2.5-flash.
-  model: "gemini-1.5-flash",
+  // gemini-2.0-flash: disponible en API v1 estable, 1,500 req/día en free tier.
+  model: "gemini-2.0-flash",
 
   // Filtros de seguridad para entorno educativo:
   // BLOCK_ONLY_HIGH = bloquea solo si la probabilidad de daño es muy alta

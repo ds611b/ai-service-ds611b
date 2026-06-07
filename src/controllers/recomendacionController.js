@@ -47,9 +47,8 @@ async function withRetry(fn, maxAttempts = 3, baseDelayMs = 1000) {
 // sin afectar la configuración existente en chatbotController.js.
 const genAI = new GoogleGenerativeAI(config.google.ai.apiKey);
 const recomendacionModel = genAI.getGenerativeModel({
-    // gemini-1.5-flash: 1,500 req/día en free tier vs 20 de gemini-2.5-flash.
-    // Para JSON estructurado la diferencia de calidad es mínima.
-    model: 'gemini-1.5-flash',
+    // gemini-2.0-flash: disponible en API v1 estable, 1,500 req/día en free tier.
+    model: 'gemini-2.0-flash',
     generationConfig: {
         maxOutputTokens: 4096,
         temperature: 0.2, // Baja temperatura: respuestas más deterministas y consistentes para JSON
