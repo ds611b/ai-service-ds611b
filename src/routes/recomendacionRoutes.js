@@ -44,8 +44,21 @@ async function recomendacionRoutes(fastify, options) {
                         mensaje: { type: 'string' }
                     }
                 },
-                400: { $ref: 'ErrorResponse' },
-                500: { $ref: 'ErrorResponse' }
+                // Esquema propio para errores: usa { error, details } en lugar de ErrorResponse
+                // que espera un objeto anidado incompatible con lo que envía el controlador.
+                400: {
+                    type: 'object',
+                    properties: {
+                        error:   { type: 'string' }
+                    }
+                },
+                500: {
+                    type: 'object',
+                    properties: {
+                        error:   { type: 'string' },
+                        details: { type: 'string' }  // mensaje real del error para debugging
+                    }
+                }
             }
         }
     }, recomendarProyectos);

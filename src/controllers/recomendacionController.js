@@ -138,7 +138,10 @@ export async function recomendarProyectos(request, reply) {
             geminiResponse = result.response.text();
         } catch (geminiError) {
             console.error('Error al llamar a Gemini:', geminiError);
-            return reply.status(500).send({ error: 'Error al procesar recomendaciones' });
+            return reply.status(500).send({
+                error: 'Error al procesar recomendaciones',
+                details: geminiError?.message ?? String(geminiError)
+            });
         }
 
         // ── PASO 4: Parsear y validar la respuesta ────────────────────────────
@@ -146,8 +149,11 @@ export async function recomendarProyectos(request, reply) {
         try {
             parsed = JSON.parse(geminiResponse);
         } catch (parseError) {
-            console.error('Error al parsear respuesta de Gemini:', geminiResponse);
-            return reply.status(500).send({ error: 'Error al procesar recomendaciones' });
+            console.error('Respuesta de Gemini no es JSON válido:', geminiResponse);
+            return reply.status(500).send({
+                error: 'Error al procesar recomendaciones',
+                details: `Gemini no devolvió JSON válido: ${geminiResponse?.slice(0, 200)}`
+            });
         }
 
         // Filtra recomendaciones con proyecto_id que no existan en la lista original
@@ -161,6 +167,9 @@ export async function recomendarProyectos(request, reply) {
 
     } catch (error) {
         console.error('Error al consultar datos para recomendaciones:', error);
-        return reply.status(500).send({ error: 'Error al consultar datos' });
+        return reply.status(500).send({
+            error: 'Error al consultar datos',
+            details: error?.message ?? String(error)
+        });
     }
 }
