@@ -1,7 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import config from '../config/config.js';
 import {
-    Usuarios,
     Habilidades,
     UsuariosHabilidades,
     ProyectosInstitucion,
@@ -145,14 +144,26 @@ export async function recomendarProyectos(request, reply) {
         }
 
         // ── PASO 4: Parsear y validar la respuesta ────────────────────────────
+        // Gemini a veces envuelve la respuesta en bloques markdown (```json ... ```)
+        // aunque se le instruya no hacerlo. Se limpian antes de parsear.
+        const cleanedResponse = geminiResponse
+            .replace(/^```(?:json)?\s*\n?/i, '')
+            .replace(/\n?```\s*$/i, '')
+            .trim();
+
         let parsed;
         try {
-            parsed = JSON.parse(geminiResponse);
+            parsed = JSON.parse(cleanedResponse);
+
+            // Si Gemini devolvió un array en lugar del objeto esperado, normalizarlo
+            if (Array.isArray(parsed)) {
+                parsed = { recomendaciones: parsed };
+            }
         } catch (parseError) {
-            console.error('Respuesta de Gemini no es JSON válido:', geminiResponse);
+            console.error('Respuesta de Gemini no es JSON válido:', cleanedResponse);
             return reply.status(500).send({
                 error: 'Error al procesar recomendaciones',
-                details: `Gemini no devolvió JSON válido: ${geminiResponse?.slice(0, 200)}`
+                details: `Gemini no devolvió JSON válido: ${cleanedResponse?.slice(0, 200)}`
             });
         }
 
