@@ -7,6 +7,7 @@ import staticFiles from '@fastify/static';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import cors from '@fastify/cors';
+import rateLimit from '@fastify/rate-limit';
 /**
  * Rutas de ADMIN
  */
@@ -51,6 +52,11 @@ await fastify.register(cors, {
   origin: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   credentials: true,
+});
+
+// Rate limiting global. Los endpoints de IA sobreescriben este límite con uno más restrictivo.
+await fastify.register(rateLimit, {
+  global: false, // No aplica límite por defecto — solo en rutas que lo configuren explícitamente
 });
 
 /**

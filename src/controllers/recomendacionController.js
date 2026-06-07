@@ -167,7 +167,7 @@ async function consultarProyectosCompatibles(habilidadIds, excluirIds) {
  * @route POST /api/recomendar-proyectos
  */
 export async function recomendarProyectos(request, reply) {
-    const { usuario_id, _debug = false } = request.body;
+    const { usuario_id } = request.body;
 
     if (!usuario_id) {
         return reply.status(400).send({ error: 'El campo usuario_id es obligatorio' });
@@ -176,7 +176,7 @@ export async function recomendarProyectos(request, reply) {
     // ── CACHE: Resultado guardado por 24 horas ────────────────────────────────
     const cacheKey = `recomendacion_resultado:${usuario_id}`;
     const cached = cache.get(cacheKey);
-    if (cached && !_debug) {
+    if (cached) {
         return reply.status(200).send(cached);
     }
 
@@ -274,13 +274,6 @@ ${JSON.stringify({ habilidades_estudiante: habilidadesNombres, proyectos })}`;
         const idsRecomendados = parsed.recomendaciones.map(r => Number(r.proyecto_id));
         actualizarHistorial(usuario_id, idsRecomendados);
 
-        if (_debug) {
-            respuesta._debug = {
-                ids_excluidos_por_historial: excluirIds,
-                proyectos_enviados_a_gemini: proyectos.map(p => ({ id: p.id, nombre: p.nombre })),
-                gemini_raw: geminiResponse.slice(0, 500)
-            };
-        }
 
         return reply.status(200).send(respuesta);
 

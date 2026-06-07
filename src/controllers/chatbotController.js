@@ -70,8 +70,8 @@ const aiModel = genAI.getGenerativeModel({
 
   // Parámetros que controlan cómo genera el texto la IA
   generationConfig: {
-    maxOutputTokens: 20000, // Máximo de tokens en la respuesta (~15,000 palabras)
-    temperature: 0.9, // Creatividad: 0 = muy determinista, 1 = muy creativo
+    maxOutputTokens: 1500, // Suficiente para respuestas concisas del asistente
+    temperature: 0.6, // Balance entre naturalidad y precisión para un asistente formal
   },
 
   // Instrucción de sistema: identidad base y normas universales que aplican a todos los roles.
@@ -397,10 +397,6 @@ export async function sendMessage(request, reply) {
     // La lista no cambia durante la sesión, así que no tiene sentido repetirla en cada turno.
     const isFirstMessage = historial.length === 0;
     const sistemaContext = isFirstMessage ? await getSystemContext() : null;
-    console.log(
-      "Historial de conversación:",
-      JSON.stringify(historial, null, 2),
-    );
 
     // ── LLAMADA A LA IA ───────────────────────────────────────────────────
 
@@ -427,11 +423,6 @@ export async function sendMessage(request, reply) {
       botResponse,
       timestamp: new Date(),
     });
-
-    console.log(
-      "Contexto del estudiante:",
-      JSON.stringify(studentContext, null, 2),
-    );
 
     reply.status(201).send({
       success: true,
@@ -743,8 +734,6 @@ async function getStudentContext(usuarioId) {
       console.log("Usuario no encontrado");
       return null;
     }
-    console.log("Estudiante encontrado:", JSON.stringify(estudiante, null, 2));
-
     // Extrae y simplifica los datos en un objeto plano listo para usar en el prompt
     const perfil = estudiante.perfil;
     const aplicaciones = estudiante.aplicacionesEstudiantes;

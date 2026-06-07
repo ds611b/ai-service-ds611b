@@ -65,6 +65,13 @@ async function chatbotRoutes(fastify, options) {
    * Requiere el `conversationId` obtenido en /chatbot/start para mantener contexto.
    */
   fastify.post('/chatbot/message', {
+    config: {
+      // 15 mensajes por minuto por IP. Protege la quota de Gemini ante uso excesivo.
+      rateLimit: {
+        max: 15,
+        timeWindow: '1 minute',
+      }
+    },
     schema: {
       description: 'Enviar mensaje al chatbot',
       tags: ['Chatbot'],
