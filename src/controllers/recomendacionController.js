@@ -40,8 +40,34 @@ const genAI = new GoogleGenerativeAI(config.google.ai.apiKey);
 const recomendacionModel = genAI.getGenerativeModel({
     model: 'gemini-2.5-flash',
     generationConfig: {
-        maxOutputTokens: 2048, // 3 recomendaciones no necesitan más
+        maxOutputTokens: 2048,
         temperature: 0.2,
+        // Modo JSON nativo: garantiza que la respuesta sea JSON válido con la estructura exacta.
+        // Elimina la necesidad de limpiar markdown o parsear formatos inesperados.
+        responseMimeType: 'application/json',
+        responseSchema: {
+            type: 'object',
+            properties: {
+                recomendaciones: {
+                    type: 'array',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            proyecto_id:               { type: 'integer' },
+                            nombre:                    { type: 'string' },
+                            institucion:               { type: 'string' },
+                            modalidad:                 { type: 'string' },
+                            habilidades_aplicables:    { type: 'array', items: { type: 'string' } },
+                            porcentaje_compatibilidad: { type: 'integer' },
+                            justificacion:             { type: 'string' }
+                        },
+                        required: ['proyecto_id', 'nombre', 'institucion', 'modalidad',
+                                   'habilidades_aplicables', 'porcentaje_compatibilidad', 'justificacion']
+                    }
+                }
+            },
+            required: ['recomendaciones']
+        }
     },
     systemInstruction: {
         parts: [{
@@ -54,28 +80,12 @@ CRITERIOS DE ANÁLISIS:
 2. Actividad principal: ¿es compatible con el perfil del estudiante?
 3. Modalidad: considérala como factor de accesibilidad.
 
-REGLAS ESTRICTAS:
-- Responde ÚNICAMENTE con JSON puro y válido. Sin texto, sin markdown, sin bloques de código.
+REGLAS:
 - Recomienda exactamente 3 proyectos. Si hay menos de 3 disponibles, devuelve los que existan.
 - Los proyecto_id deben ser exactamente los IDs recibidos en el input; nunca inventes IDs.
 - justificacion: en español, segunda persona (tú), motivadora, máximo 1 oración breve.
 - porcentaje_compatibilidad: número entero entre 0 y 100.
-- habilidades_aplicables: máximo 3 strings tomados de las habilidades del estudiante que más aplican.
-
-FORMATO DE RESPUESTA OBLIGATORIO:
-{
-  "recomendaciones": [
-    {
-      "proyecto_id": 1,
-      "nombre": "Nombre del proyecto",
-      "institucion": "Nombre de la institución",
-      "modalidad": "Presencial",
-      "habilidades_aplicables": ["Comunicación", "Trabajo en equipo"],
-      "porcentaje_compatibilidad": 82,
-      "justificacion": "Tu perfil encaja perfectamente con las actividades de este proyecto."
-    }
-  ]
-}`
+- habilidades_aplicables: máximo 3 habilidades del estudiante que más aplican al proyecto.`
         }]
     }
 });
@@ -218,12 +228,7 @@ export async function recomendarProyectos(request, reply) {
             institucion: p.institucion?.nombre ?? 'No especificada'
         }));
 
-        // La instrucción de formato se incluye en el mensaje además de en systemInstruction,
-        // porque Gemini a veces ignora systemInstruction y responde en lenguaje natural.
-        const prompt = `Analiza los siguientes datos y devuelve ÚNICAMENTE el JSON según el formato de tus instrucciones. Sin texto, sin markdown, sin explicaciones fuera del JSON.
-
-DATOS:
-${JSON.stringify({ habilidades_estudiante: habilidadesNombres, proyectos })}`;
+        const prompt = JSON.stringify({ habilidades_estudiante: habilidadesNombres, proyectos });
 
         // ── PASO 4: Llamada a Gemini ──────────────────────────────────────────
         let geminiResponse;
@@ -238,38 +243,23 @@ ${JSON.stringify({ habilidades_estudiante: habilidadesNombres, proyectos })}`;
             });
         }
 
-        // ── PASO 5: Parsear y validar respuesta ───────────────────────────────
-        const cleanedResponse = geminiResponse
-            .replace(/^```(?:json)?\s*\n?/i, '')
-            .replace(/\n?```\s*$/i, '')
-            .trim();
-
+        // ── PASO 5: Parsear respuesta ─────────────────────────────────────────
+        // Con responseMimeType + responseSchema, Gemini garantiza JSON válido
+        // con la estructura exacta. No se necesita limpieza de markdown ni normalización.
         let parsed;
         try {
-            parsed = JSON.parse(cleanedResponse);
-            if (Array.isArray(parsed)) {
-                parsed = {
-                    recomendaciones: parsed.map(item => ({
-                        ...item,
-                        proyecto_id: item.proyecto_id ?? item.id
-                    }))
-                };
-            }
+            parsed = JSON.parse(geminiResponse);
         } catch {
-            console.error('Respuesta de Gemini no es JSON válido:', cleanedResponse);
+            console.error('Respuesta de Gemini no es JSON válido:', geminiResponse);
             return reply.status(500).send({
                 error: 'Error al procesar recomendaciones',
-                details: `Gemini no devolvió JSON válido: ${cleanedResponse?.slice(0, 200)}`
+                details: `Gemini no devolvió JSON válido: ${geminiResponse?.slice(0, 200)}`
             });
         }
 
-        parsed.recomendaciones = (parsed.recomendaciones ?? []).map(r => ({
-            ...r,
-            proyecto_id: r.proyecto_id ?? r.id
-        }));
-
+        // Filtro de seguridad: descarta IDs que Gemini haya inventado
         const idsValidos = new Set(proyectosDB.map(p => Number(p.id)));
-        parsed.recomendaciones = parsed.recomendaciones.filter(r =>
+        parsed.recomendaciones = (parsed.recomendaciones ?? []).filter(r =>
             idsValidos.has(Number(r.proyecto_id))
         );
 
@@ -284,7 +274,7 @@ ${JSON.stringify({ habilidades_estudiante: habilidadesNombres, proyectos })}`;
             respuesta._debug = {
                 ids_excluidos_por_historial: excluirIds,
                 proyectos_enviados_a_gemini: proyectos.map(p => ({ id: p.id, nombre: p.nombre })),
-                gemini_raw: cleanedResponse.slice(0, 500)
+                gemini_raw: geminiResponse.slice(0, 500)
             };
         }
 
