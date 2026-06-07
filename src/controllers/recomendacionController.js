@@ -40,7 +40,7 @@ const genAI = new GoogleGenerativeAI(config.google.ai.apiKey);
 const recomendacionModel = genAI.getGenerativeModel({
     model: 'gemini-2.5-flash',
     generationConfig: {
-        maxOutputTokens: 2048,
+        maxOutputTokens: 4096,
         temperature: 0.2,
         // Modo JSON nativo: garantiza que la respuesta sea JSON válido con la estructura exacta.
         // Elimina la necesidad de limpiar markdown o parsear formatos inesperados.
@@ -228,7 +228,11 @@ export async function recomendarProyectos(request, reply) {
             institucion: p.institucion?.nombre ?? 'No especificada'
         }));
 
-        const prompt = JSON.stringify({ habilidades_estudiante: habilidadesNombres, proyectos });
+        // El prompt explica la tarea además del dato, porque con responseSchema
+        // Gemini puede devolver el array vacío si recibe solo datos sin instrucción.
+        const prompt = `Recomienda los 3 proyectos más adecuados para el estudiante basándote en sus habilidades y en la descripcion y actividad_principal de cada proyecto. Rellena todos los campos del esquema.
+
+${JSON.stringify({ habilidades_estudiante: habilidadesNombres, proyectos })}`;
 
         // ── PASO 4: Llamada a Gemini ──────────────────────────────────────────
         let geminiResponse;
