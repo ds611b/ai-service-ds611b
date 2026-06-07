@@ -51,8 +51,8 @@ const genAI = new GoogleGenerativeAI(config.google.ai.apiKey);
  * Esta instancia se reutiliza en cada mensaje para no re-crear la conexión.
  */
 const aiModel = genAI.getGenerativeModel({
-  // gemini-2.0-flash: disponible en API v1 estable, 1,500 req/día en free tier.
-  model: "gemini-2.0-flash",
+  // gemini-2.5-flash: disponible en API v1 estable, 1,500 req/día en free tier.
+  model: "gemini-2.5-flash",
 
   // Filtros de seguridad para entorno educativo:
   // BLOCK_ONLY_HIGH = bloquea solo si la probabilidad de daño es muy alta
@@ -390,15 +390,13 @@ export async function sendMessage(request, reply) {
     // Contexto del estudiante: datos personales, carrera, habilidades y proyectos inscritos
     const studentContext = await getStudentContext(usuarioId);
 
-    // Contexto del sistema: todos los proyectos e instituciones disponibles en la plataforma
-    const sistemaContext = await getSystemContext();
-    console.log(
-      "Contexto del sistema:",
-      JSON.stringify(sistemaContext, null, 2),
-    );
+    // Historial: últimos 5 mensajes (reducido de 10 para optimizar tokens enviados a Gemini)
+    const historial = await getConversationMessages(conversationId, 5);
 
-    // Historial: últimos 10 mensajes de la conversación para que la IA mantenga coherencia
-    const historial = await getConversationMessages(conversationId);
+    // sistemaContext (proyectos e instituciones) solo se inyecta en el primer mensaje.
+    // La lista no cambia durante la sesión, así que no tiene sentido repetirla en cada turno.
+    const isFirstMessage = historial.length === 0;
+    const sistemaContext = isFirstMessage ? await getSystemContext() : null;
     console.log(
       "Historial de conversación:",
       JSON.stringify(historial, null, 2),
@@ -816,16 +814,21 @@ function buildPrompt(message, context, history, sistemaContext, roleContext) {
 
   // ── CAPA 2 y 3: Contexto del sistema + contexto personal del estudiante ─
   if (context) {
+    // En el primer mensaje se incluye la lista de proyectos e instituciones de la plataforma.
+    // En mensajes siguientes ya la IA los conoce, no hace falta repetirlos.
+    if (sistemaContext) {
+      prompt += `\n\nContexto de la plataforma:
+    - Proyectos disponibles: ${sistemaContext.proyectos.map((p) => p.nombre).join(", ") || "No especificados"}
+    - Instituciones participantes: ${sistemaContext.instituciones.map((i) => i.nombre).join(", ") || "No especificadas"}`;
+    }
+
     prompt += `\n\nInformación del usuario:
-    - Proyectos del sistema: ${sistemaContext.proyectos.map((p) => p.nombre).join(", ") || "No especificados"}
-    - Instituciones del sistema: ${sistemaContext.instituciones.map((i) => i.nombre).join(", ") || "No especificadas"}
     - Nombre: ${context.nombre}
     - Carrera: ${context.carrera}
     - Escuela: ${context.escuela}
     - Habilidades: ${context.habilidades.join(", ") || "No especificadas"}
-    - Proyectos: ${context.proyectos.length > 0 ? context.proyectos.map((p) => `${p.nombre} (${p.institucion})`).join(", ") : "No especificados"}
-    - Año académico: ${context.añoAcademico || "No especificado"}
-    - Año académico: ${context.añoAcademico}`;
+    - Proyectos inscritos: ${context.proyectos.length > 0 ? context.proyectos.map((p) => `${p.nombre} (${p.institucion})`).join(", ") : "No especificados"}
+    - Año académico: ${context.añoAcademico || "No especificado"}`;
 
     // Detalla el estado de cada proyecto en el que el estudiante participa
     if (context.proyectos.length > 0) {

@@ -47,8 +47,8 @@ async function withRetry(fn, maxAttempts = 3, baseDelayMs = 1000) {
 // sin afectar la configuración existente en chatbotController.js.
 const genAI = new GoogleGenerativeAI(config.google.ai.apiKey);
 const recomendacionModel = genAI.getGenerativeModel({
-    // gemini-2.0-flash: disponible en API v1 estable, 1,500 req/día en free tier.
-    model: 'gemini-2.0-flash',
+    // gemini-2.5-flash: disponible en API v1 estable, 1,500 req/día en free tier.
+    model: 'gemini-2.5-flash',
     generationConfig: {
         maxOutputTokens: 4096,
         temperature: 0.2, // Baja temperatura: respuestas más deterministas y consistentes para JSON
@@ -140,7 +140,7 @@ export async function recomendarProyectos(request, reply) {
                     attributes: ['id', 'descripcion']
                 }
             ],
-            limit: 25,
+            limit: 15,
             order: [['created_at', 'DESC']]
         });
 
@@ -155,7 +155,7 @@ export async function recomendarProyectos(request, reply) {
         const proyectos = proyectosDB.map(p => ({
             id: p.id,
             nombre: p.nombre,
-            descripcion: p.descripcion,
+            descripcion: p.descripcion?.slice(0, 200),
             modalidad: p.modalidad,
             institucion: p.institucion?.nombre ?? 'No especificada',
             // Si el proyecto tiene habilidades requeridas registradas, se incluyen
