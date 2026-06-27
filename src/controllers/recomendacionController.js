@@ -121,10 +121,16 @@ function resetParcialHistorial(usuarioId) {
 
 // ── QUERY PRE-FILTRADA ────────────────────────────────────────────────────────
 // INNER JOIN con Habilidades: solo devuelve proyectos que tengan al menos 1 habilidad
-// en común con el estudiante. El ranking semántico fino lo hace Gemini sobre estos 10.
+// en común con el estudiante. Luego se ordenan por nº de habilidades coincidentes
+// (los más compatibles primero) y se toman los 10 mejores. El ranking semántico
+// fino lo hace Gemini sobre esos 10.
+//
+// Antes había `limit: 10` sin ORDER BY: los 10 candidatos salían en orden arbitrario
+// (≈ por id), así que un proyecto con muchas coincidencias podía quedar fuera mientras
+// entraba uno con una sola. Ahora el límite se aplica tras ordenar por compatibilidad.
 
 async function consultarProyectosCompatibles(habilidadIds, excluirIds) {
-    return ProyectosInstitucion.findAll({
+    const proyectos = await ProyectosInstitucion.findAll({
         where: {
             estado: 'Aprobado',
             disponibilidad: true,
@@ -140,18 +146,27 @@ async function consultarProyectosCompatibles(habilidadIds, excluirIds) {
                 // INNER JOIN: filtra proyectos cuyas habilidades requeridas
                 // coincidan con al menos una habilidad del estudiante.
                 // required: true hace el JOIN obligatorio (excluye proyectos sin match).
+                // Se traen los ids de las habilidades coincidentes para contarlas por proyecto.
                 model: Habilidades,
                 through: { attributes: [] },
-                attributes: [],
+                attributes: ['id'],
                 where: { id: { [Op.in]: habilidadIds } },
                 required: true
             }
         ],
         attributes: ['id', 'nombre', 'descripcion', 'actividad_principal', 'modalidad'],
-        distinct: true, // Evita duplicados cuando un proyecto coincide con múltiples habilidades
-        limit: 10,
-        subQuery: false
     });
+
+    // Ordena por nº de habilidades coincidentes (DESC) y toma los 10 mejores.
+    // matchCount queda disponible en cada proyecto por si luego se usa para
+    // anclar un porcentaje de compatibilidad real (ver TODO en recomendarProyectos).
+    return proyectos
+        .map(p => {
+            p.matchCount = p.Habilidades?.length ?? 0;
+            return p;
+        })
+        .sort((a, b) => b.matchCount - a.matchCount || a.id - b.id)
+        .slice(0, 10);
 }
 
 /**
@@ -219,6 +234,10 @@ export async function recomendarProyectos(request, reply) {
         // ── PASO 3: Payload para Gemini (reducido) ────────────────────────────
         // Se omiten las habilidades_requeridas de los proyectos: el pre-filtro SQL
         // ya garantizó la coincidencia. Gemini analiza descripcion + actividad_principal.
+        // TODO (pendiente a futuro): porcentaje_compatibilidad lo inventa Gemini sin
+        // anclaje. Ya se cuenta p.matchCount (habilidades coincidentes); se puede pasar
+        // como base (matchCount / total habilidades del estudiante) para que el
+        // porcentaje sea defendible y Gemini solo lo ajuste con su análisis semántico.
         const proyectos = proyectosDB.map(p => ({
             id: p.id,
             nombre: p.nombre,
