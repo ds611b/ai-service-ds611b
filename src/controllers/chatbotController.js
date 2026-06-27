@@ -560,7 +560,9 @@ export async function deleteConversation(request, reply) {
     }
 
     // Transacción: si falla cualquier operación, se revierte todo (rollback automático)
-    await sequelize.transaction(async (t) => {
+    // Se usa la instancia de Sequelize asociada al modelo (Conversation.sequelize),
+    // mismo patrón que el resto del proyecto, para no depender de un import suelto.
+    await Conversation.sequelize.transaction(async (t) => {
       // Elimina todos los mensajes de la conversación primero
       await Conversation.destroy({
         where: { conversationId },
