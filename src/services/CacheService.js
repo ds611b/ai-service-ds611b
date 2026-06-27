@@ -112,3 +112,10 @@ export const TTL = {
     RECOMENDACION: 24 * 60 * 60 * 1000,                // 24 horas — resultado completo por usuario
     RECOMENDACION_HISTORIAL: 7 * 24 * 60 * 60 * 1000, //  7 días  — IDs ya recomendados (evita repetición)
 };
+
+// TODO (pendiente a futuro): RECOMENDACION y RECOMENDACION_HISTORIAL son datos
+// con valor semántico (no solo rendimiento). Al vivir en memoria se pierden al
+// reiniciar y no se comparten entre instancias, por lo que la anti-repetición
+// puede fallar (proyectos repetidos). Migrar a persistencia (MySQL o Redis)
+// cuando se escale a multi-instancia. Los caches *_CONTEXT sí pueden quedar en
+// memoria: son solo rendimiento y un cache miss se recupera de la BD.
