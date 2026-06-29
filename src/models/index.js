@@ -21,6 +21,7 @@ import EncargadoInstitucion from './EncargadoInstitucion.js';
 import ChatbotConversation from './ChatbotConversation.js';
 import ConversationSession from './ConversationSession.js';
 import Conversation from './Conversation.js';
+import ConfiguracionIA from './ConfiguracionIA.js';
 
 
 // Definir relaciones
@@ -121,5 +122,6 @@ export {
   EncargadoInstitucion,
   ChatbotConversation,
   ConversationSession,
-  Conversation
+  Conversation,
+  ConfiguracionIA
 };

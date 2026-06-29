@@ -15,6 +15,7 @@ import {
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import config from "../config/config.js";
 import { cache, TTL } from "../services/CacheService.js";
+import { isChatbotActivo } from "../services/configuracionIAService.js";
 
 /**
  * Instrucción de sistema del chatbot.
@@ -254,6 +255,16 @@ export async function startConversation(request, reply) {
   }
 
   try {
+    // El Coordinador General puede desactivar el chatbot para toda la plataforma.
+    if (!(await isChatbotActivo())) {
+      return reply
+        .status(403)
+        .send(createErrorResponse(
+          "El asistente virtual está desactivado actualmente",
+          "CHATBOT_DESACTIVADO",
+        ));
+    }
+
     // Verifica que el usuario existe en la BD antes de crear la sesión
     const usuario = await Usuarios.findByPk(usuarioId, {
       attributes: ["id", "primer_nombre", "primer_apellido"],
@@ -359,6 +370,16 @@ export async function sendMessage(request, reply) {
   }
 
   try {
+    // El Coordinador General puede desactivar el chatbot para toda la plataforma.
+    if (!(await isChatbotActivo())) {
+      return reply
+        .status(403)
+        .send(createErrorResponse(
+          "El asistente virtual está desactivado actualmente",
+          "CHATBOT_DESACTIVADO",
+        ));
+    }
+
     // Control de acceso: verifica que el usuarioId sea el dueño de esa sesión
     const sesion = await ConversationSession.findOne({
       where: { conversationId, usuarioId },
