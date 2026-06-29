@@ -2,6 +2,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { Op } from 'sequelize';
 import config from '../config/config.js';
 import { cache, TTL } from '../services/CacheService.js';
+import { isRecomendacionesActivo } from '../services/configuracionIAService.js';
 import {
     Habilidades,
     UsuariosHabilidades,
@@ -186,6 +187,14 @@ export async function recomendarProyectos(request, reply) {
 
     if (!usuario_id) {
         return reply.status(400).send({ error: 'El campo usuario_id es obligatorio' });
+    }
+
+    // El Coordinador General puede desactivar las recomendaciones para toda la plataforma.
+    if (!(await isRecomendacionesActivo())) {
+        return reply.status(403).send({
+            error: 'Las recomendaciones de proyectos están desactivadas actualmente',
+            code: 'RECOMENDACIONES_DESACTIVADO'
+        });
     }
 
     // ── CACHE: Resultado guardado por 24 horas ────────────────────────────────
