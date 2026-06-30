@@ -26,6 +26,7 @@ import contactoEmergenciaRoutes from './routes/contactoEmergenciaRoutes.js';
 import encargadoInstitucionRoutes from './routes/encargadoInstitucionRoutes.js';
 import chatbotRoutes from './routes/chatbotRoutes.js';
 import recomendacionRoutes from './routes/recomendacionRoutes.js';
+import extraerHabilidadesRoutes from './routes/extraerHabilidadesRoutes.js';
 import { getPerfilUsuarioById } from './controllers/perfilUsuarioController.js';
 
 
@@ -902,6 +903,7 @@ fastify.register(contactoEmergenciaRoutes, { prefix: '/api' });
 fastify.register(encargadoInstitucionRoutes, { prefix: '/api' });
 fastify.register(chatbotRoutes, { prefix: '/api' });
 fastify.register(recomendacionRoutes, { prefix: '/api' });
+fastify.register(extraerHabilidadesRoutes, { prefix: '/api' });
 
 /**
  * Registra la landing page de la API
