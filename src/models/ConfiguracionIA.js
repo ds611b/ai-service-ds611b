@@ -23,6 +23,11 @@ const ConfiguracionIA = sequelize.define('ConfiguracionIA', {
     allowNull: false,
     defaultValue: true
   },
+  extraccion_habilidades_activo: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: true
+  },
   actualizado_por: {
     type: DataTypes.INTEGER,
     allowNull: true

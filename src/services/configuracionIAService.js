@@ -12,7 +12,11 @@ import { cache } from './CacheService.js';
 
 const CACHE_KEY = 'configuracion_ia';
 const TTL_MS = 60 * 1000;
-const POR_DEFECTO = { chatbot_activo: true, recomendaciones_activo: true };
+const POR_DEFECTO = {
+  chatbot_activo: true,
+  recomendaciones_activo: true,
+  extraccion_habilidades_activo: true
+};
 
 async function getConfiguracionIA() {
   const cached = cache.get(CACHE_KEY);
@@ -23,7 +27,8 @@ async function getConfiguracionIA() {
     const valor = config
       ? {
           chatbot_activo: !!config.chatbot_activo,
-          recomendaciones_activo: !!config.recomendaciones_activo
+          recomendaciones_activo: !!config.recomendaciones_activo,
+          extraccion_habilidades_activo: !!config.extraccion_habilidades_activo
         }
       : POR_DEFECTO;
 
@@ -42,4 +47,8 @@ export async function isChatbotActivo() {
 
 export async function isRecomendacionesActivo() {
   return (await getConfiguracionIA()).recomendaciones_activo;
+}
+
+export async function isExtraccionHabilidadesActivo() {
+  return (await getConfiguracionIA()).extraccion_habilidades_activo;
 }
