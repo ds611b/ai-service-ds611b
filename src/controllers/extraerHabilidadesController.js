@@ -6,7 +6,8 @@ import { isExtraccionHabilidadesActivo } from '../services/configuracionIAServic
 
 // Límites alineados con el modelo: Habilidades.descripcion es STRING(50) UNIQUE.
 const MAX_LEN = 50;
-const MAX_HABILIDADES = 30; // tope defensivo por petición
+const MAX_CANDIDATOS = 50; // tope defensivo de nombres a procesar por petición
+const MAX_NUEVAS = 5;      // máximo de habilidades NUEVAS (las existentes no tienen límite)
 
 // Instancia de Gemini dedicada a la extracción de habilidades.
 const genAI = new GoogleGenerativeAI(config.google.ai.apiKey);
@@ -26,15 +27,19 @@ const extractorModel = genAI.getGenerativeModel({
   },
   systemInstruction: {
     parts: [{
-      text: `Eres un extractor de habilidades para una plataforma de Servicio Social Estudiantil.
-A partir del texto del usuario, identifica las habilidades (técnicas y blandas) que describe o implica.
+      text: `Eres un extractor de HABILIDADES BLANDAS (competencias interpersonales y actitudinales) para una plataforma de Servicio Social Estudiantil.
+Del texto del usuario, identifica ÚNICAMENTE habilidades blandas.
+
+EJEMPLOS de habilidades blandas válidas: Comunicación, Trabajo en equipo, Liderazgo, Empatía, Responsabilidad, Adaptabilidad, Resolución de problemas, Pensamiento crítico, Organización, Proactividad, Escucha activa, Creatividad, Tolerancia, Puntualidad, Gestión del tiempo.
+
+NO incluyas habilidades técnicas ni conocimientos específicos: nada de lenguajes de programación, software, herramientas, certificaciones, oficios o materias (p.ej. NO "JavaScript", "Excel", "Contabilidad", "Diseño gráfico", "Inglés").
 
 REGLAS:
-- Devuelve solo nombres de habilidades concisos y normalizados, en español (p.ej. "Trabajo en equipo", "JavaScript", "Atención al cliente").
+- Devuelve solo nombres concisos y normalizados, en español, en su forma canónica.
 - Cada nombre debe tener máximo 50 caracteres.
-- Sin duplicados ni sinónimos repetidos; usa la forma canónica más común.
+- Sin duplicados ni sinónimos repetidos.
 - No inventes habilidades que no estén razonablemente implícitas en el texto.
-- Si el texto no describe ninguna habilidad, devuelve una lista vacía.`
+- Si el texto no describe ninguna habilidad blanda, devuelve una lista vacía.`
     }]
   }
 });
@@ -99,7 +104,7 @@ export async function extraerHabilidades(request, reply) {
       if (!nombre) continue;
       const clave = normalizar(nombre);
       if (clave && !candidatos.has(clave)) candidatos.set(clave, nombre);
-      if (candidatos.size >= MAX_HABILIDADES) break;
+      if (candidatos.size >= MAX_CANDIDATOS) break;
     }
 
     if (candidatos.size === 0) {
@@ -115,20 +120,25 @@ export async function extraerHabilidades(request, reply) {
     const catalogo = await Habilidades.findAll({ attributes: ['id', 'descripcion'] });
     const mapaExistentes = new Map(catalogo.map(h => [normalizar(h.descripcion ?? ''), h]));
 
-    // existentes: habilidades con id (ya en catálogo, o recién creadas si crear=true).
-    // nuevas: nombres que aún NO están en el catálogo (solo cuando crear=false).
+    // existentes: habilidades con id (ya en catálogo, o recién creadas si crear=true) — SIN límite.
+    // nuevas: nombres que aún NO están en el catálogo — máximo MAX_NUEVAS (las demás se descartan).
     const existentes = [];
     const nuevas = [];
     let creadas = 0;
+    let nuevasContador = 0; // cuenta habilidades nuevas ya consideradas (para el tope de 5)
 
     for (const [clave, nombre] of candidatos) {
       const enCatalogo = mapaExistentes.get(clave);
       if (enCatalogo) {
+        // Existente: se incluye sin límite.
         existentes.push({ id: enCatalogo.id, descripcion: enCatalogo.descripcion });
         continue;
       }
 
-      // No existe en el catálogo.
+      // Es nueva: aplica el tope de MAX_NUEVAS (las que sobren se ignoran).
+      if (nuevasContador >= MAX_NUEVAS) continue;
+      nuevasContador++;
+
       if (!crear) {
         // Modo recomendación: se devuelve solo el nombre (se creará al guardar).
         nuevas.push(nombre);
