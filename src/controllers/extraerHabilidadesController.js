@@ -8,6 +8,7 @@ import { isExtraccionHabilidadesActivo } from '../services/configuracionIAServic
 const MAX_LEN = 50;
 const MAX_CANDIDATOS = 50; // tope defensivo de nombres a procesar por petición
 const MAX_NUEVAS = 5;      // máximo de habilidades NUEVAS (las existentes no tienen límite)
+const MIN_TOTAL = 5;       // mínimo de habilidades a devolver (existentes + nuevas)
 
 // Instancia de Gemini dedicada a la extracción de habilidades.
 const genAI = new GoogleGenerativeAI(config.google.ai.apiKey);
@@ -28,18 +29,22 @@ const extractorModel = genAI.getGenerativeModel({
   systemInstruction: {
     parts: [{
       text: `Eres un extractor de HABILIDADES BLANDAS (competencias interpersonales y actitudinales) para una plataforma de Servicio Social Estudiantil.
-Del texto del usuario, identifica ÚNICAMENTE habilidades blandas.
+Del texto del usuario, identifica habilidades blandas.
 
 EJEMPLOS de habilidades blandas válidas: Comunicación, Trabajo en equipo, Liderazgo, Empatía, Responsabilidad, Adaptabilidad, Resolución de problemas, Pensamiento crítico, Organización, Proactividad, Escucha activa, Creatividad, Tolerancia, Puntualidad, Gestión del tiempo.
 
 NO incluyas habilidades técnicas ni conocimientos específicos: nada de lenguajes de programación, software, herramientas, certificaciones, oficios o materias (p.ej. NO "JavaScript", "Excel", "Contabilidad", "Diseño gráfico", "Inglés").
 
+Junto al texto del usuario recibirás un CATÁLOGO de habilidades blandas que ya existen en la base de datos.
+
 REGLAS:
-- Devuelve solo nombres concisos y normalizados, en español, en su forma canónica.
+- Debes devolver un TOTAL de al menos ${MIN_TOTAL} habilidades. No es necesario crear habilidades nuevas: si el catálogo ya cubre ${MIN_TOTAL} o más habilidades relevantes, reutilízalas todas y no inventes ninguna.
+- Prioriza SIEMPRE reutilizar habilidades del catálogo: si una habilidad del catálogo aplica (aunque sea de forma general) al texto, cópiala EXACTAMENTE con el mismo texto del catálogo (mismas mayúsculas, tildes y espacios) en vez de escribirla de nuevo con otras palabras.
+- Solo propón una habilidad que no esté en el catálogo cuando sea claramente necesaria para cubrir algo importante del texto que ninguna del catálogo cubre, o cuando sea indispensable para llegar al mínimo de ${MIN_TOTAL}.
+- Si el texto describe explícitamente menos de ${MIN_TOTAL} habilidades, completa la lista hasta el mínimo con otras habilidades blandas comunes y razonables para un servicio social (preferentemente tomadas del catálogo), aunque no estén mencionadas de forma literal.
 - Cada nombre debe tener máximo 50 caracteres.
 - Sin duplicados ni sinónimos repetidos.
-- No inventes habilidades que no estén razonablemente implícitas en el texto.
-- Si el texto no describe ninguna habilidad blanda, devuelve una lista vacía.`
+- Nunca devuelvas una lista vacía: siempre entrega al menos ${MIN_TOTAL} habilidades.`
     }]
   }
 });
@@ -82,10 +87,15 @@ export async function extraerHabilidades(request, reply) {
   }
 
   try {
-    // ── 1) Extracción con IA ──────────────────────────────────────────────
+    // ── 1) Extracción con IA (se pasa el catálogo para favorecer reutilización) ─
+    const catalogoPrevio = await Habilidades.findAll({ attributes: ['id', 'descripcion'] });
+    const catalogoTexto = catalogoPrevio.map(h => h.descripcion).join(', ');
+
+    const promptTexto = `CATÁLOGO de habilidades blandas existentes:\n${catalogoTexto || '(vacío, no hay habilidades registradas aún)'}\n\nTEXTO del proyecto:\n${texto.trim()}`;
+
     let nombresIA;
     try {
-      const result = await extractorModel.generateContent(texto.trim());
+      const result = await extractorModel.generateContent(promptTexto);
       const parsed = JSON.parse(result.response.text());
       nombresIA = Array.isArray(parsed?.habilidades) ? parsed.habilidades : [];
     } catch (iaError) {
@@ -117,8 +127,7 @@ export async function extraerHabilidades(request, reply) {
     }
 
     // ── 3) Match contra el catálogo existente (case/acento-insensitive) ───
-    const catalogo = await Habilidades.findAll({ attributes: ['id', 'descripcion'] });
-    const mapaExistentes = new Map(catalogo.map(h => [normalizar(h.descripcion ?? ''), h]));
+    const mapaExistentes = new Map(catalogoPrevio.map(h => [normalizar(h.descripcion ?? ''), h]));
 
     // existentes: habilidades con id (ya en catálogo, o recién creadas si crear=true) — SIN límite.
     // nuevas: nombres que aún NO están en el catálogo — máximo MAX_NUEVAS (las demás se descartan).
